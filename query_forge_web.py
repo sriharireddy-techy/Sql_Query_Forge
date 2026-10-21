@@ -22,8 +22,9 @@ PAGE = r'''<!doctype html>
 </style></head><body><header><h1>Query Forge</h1><p>Explore how a SELECT query moves through a compiler and rule-based review.</p></header>
 <main><section class="editor"><h2>SQL query</h2><textarea id="sql" spellcheck="false">select * from Student where age > 20;</textarea><br><button id="run">Analyze query</button><span id="status"></span></section>
 <section class="grid" id="results" hidden>
-<article class="card"><h2>Review</h2><div id="score" class="score"></div><pre id="report"></pre></article>
+<article class="card"><h2>Review</h2><div id="score" class="score"></div><div id="score_basis" class="muted" style="margin:4px 0 8px 0;font-size:13px"></div><pre id="report"></pre></article>
 <article class="card"><h2>Formatted SQL</h2><pre id="formatted"></pre></article>
+<article class="card"><h2>Rule-Based Optimization</h2><div id="optimizations"></div><pre id="optimized_sql" style="margin-top:8px"></pre></article>
 <article class="card"><h2>Compiler stages</h2><div id="stages"></div></article>
 <article class="card"><h2>Code smells and suggestions</h2><div id="smells"></div></article>
 <article class="card"><h2>Abstract syntax tree</h2><pre id="ast"></pre></article>
@@ -32,9 +33,99 @@ PAGE = r'''<!doctype html>
 <article class="card"><h2>Complexity</h2><pre id="complexity"></pre></article>
 </section></main><script>
 const $=id=>document.getElementById(id);const pretty=x=>JSON.stringify(x,null,2);
-function list(target,items,empty){$(target).innerHTML=items.length?items.map(x=>`<div class="issue ${x.severity==='error'?'error':''}"><b>${x.severity.toUpperCase()}</b> ${x.message}</div>`).join(''):`<span class="muted">${empty}</span>`}
-async function analyze(){ $('status').textContent='Analyzing…';$('results').hidden=true;try{const r=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sql:$('sql').value})});const d=await r.json();$('results').hidden=false;$('score').textContent=`${d.quality_score.score}/100 · ${d.quality_score.label}`;$('report').textContent=d.report;$('formatted').textContent=d.formatted_sql||'Formatting is unavailable until parsing succeeds.';$('ast').textContent=d.ast?pretty(d.ast):'AST unavailable: an earlier phase reported an error.';$('tree').textContent=d.parse_tree?pretty(d.parse_tree):'Parse tree unavailable: an earlier phase reported an error.';$('complexity').textContent=d.complexity?pretty(d.complexity):'Complexity unavailable: an earlier phase reported an error.';list('diagnostics',d.diagnostics,'No errors detected.');list('smells',d.code_smells,'No code smells detected.');const stages=[['Lexical analysis',`${d.tokens.length} tokens`,true],['Syntax analysis',d.ast?'SELECT grammar accepted':'Stopped on syntax error',!!d.ast],['AST generation',d.ast?'AST generated':'Unavailable',!!d.ast],['Semantic analysis',d.diagnostics.some(x=>x.phase==='semantic'&&x.severity==='error')?'Schema errors found':'Schema checks complete',!d.diagnostics.some(x=>x.phase==='semantic'&&x.severity==='error')],['Formatting',d.formatted_sql?'SQL formatted':'Unavailable',!!d.formatted_sql],['Review and scoring',`${d.code_smells.length} smell(s); score ${d.quality_score.score}`,d.ok]];$('stages').innerHTML=stages.map((s,i)=>`<span class="pill">${i+1}. ${s[0]}</span> <span class="muted">${s[1]}</span><br>`).join('');$('status').textContent=d.ok?'Analysis complete':'Analysis completed with errors.'}catch(e){$('status').textContent='Could not reach the local analyzer.'}}
-$('run').addEventListener('click',analyze);analyze();
+function renderIssues(targetId,items,emptyText){
+  const container=$(targetId);
+  container.textContent='';
+  if(!items||items.length===0){
+    const span=document.createElement('span');
+    span.className='muted';
+    span.textContent=emptyText;
+    container.appendChild(span);
+    return;
+  }
+  for(const item of items){
+    const div=document.createElement('div');
+    div.className='issue'+(item.severity==='error'?' error':'');
+    const bold=document.createElement('b');
+    bold.textContent=(item.severity||'INFO').toUpperCase();
+    div.appendChild(bold);
+    div.appendChild(document.createTextNode(' '+(item.message||'')));
+    container.appendChild(div);
+  }
+}
+function renderOptimizations(targetId,sqlTargetId,optimizations,optimizedSql){
+  const container=$(targetId);
+  container.textContent='';
+  const sqlEl=$(sqlTargetId);
+  if(!optimizations||optimizations.length===0){
+    const span=document.createElement('span');
+    span.className='muted';
+    span.textContent='No applicable optimizations (WHERE predicates are already minimal or non-deterministic).';
+    container.appendChild(span);
+    sqlEl.textContent='No rewrite performed.';
+    return;
+  }
+  for(const opt of optimizations){
+    const div=document.createElement('div');
+    div.className='issue';
+    const bold=document.createElement('b');
+    bold.textContent='OPTIMIZATION';
+    div.appendChild(bold);
+    div.appendChild(document.createTextNode(' '+opt));
+    container.appendChild(div);
+  }
+  sqlEl.textContent=optimizedSql||'';
+}
+function renderStages(targetId,stages){
+  const container=$(targetId);
+  container.textContent='';
+  stages.forEach((s,i)=>{
+    const pill=document.createElement('span');
+    pill.className='pill';
+    pill.textContent=`${i+1}. ${s[0]}`;
+    const muted=document.createElement('span');
+    muted.className='muted';
+    muted.textContent=s[1];
+    container.appendChild(pill);
+    container.appendChild(document.createTextNode(' '));
+    container.appendChild(muted);
+    container.appendChild(document.createElement('br'));
+  });
+}
+async function analyze(){
+  $('status').textContent='Analyzing…';
+  $('results').hidden=true;
+  try{
+    const r=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sql:$('sql').value})});
+    const d=await r.json();
+    $('results').hidden=false;
+    $('score').textContent=`${d.quality_score.score}/100 · ${d.quality_score.label}`;
+    $('score_basis').textContent=d.quality_score.basis||'';
+    $('report').textContent=d.report;
+    $('formatted').textContent=d.formatted_sql||'Formatting is unavailable until parsing succeeds.';
+    $('ast').textContent=d.ast?pretty(d.ast):'AST unavailable: an earlier phase reported an error.';
+    $('tree').textContent=d.parse_tree?pretty(d.parse_tree):'Parse tree unavailable: an earlier phase reported an error.';
+    $('complexity').textContent=d.complexity?pretty(d.complexity):'Complexity unavailable: an earlier phase reported an error.';
+    renderIssues('diagnostics',d.diagnostics,'No errors detected.');
+    renderIssues('smells',d.code_smells,'No code smells detected.');
+    renderOptimizations('optimizations','optimized_sql',d.optimizations,d.optimized_sql);
+    const stages=[
+      ['Lexical analysis',`${d.tokens.length} tokens`,true],
+      ['Syntax analysis',d.ast?'SELECT grammar accepted':'Stopped on syntax error',!!d.ast],
+      ['AST generation',d.ast?'AST generated':'Unavailable',!!d.ast],
+      ['Semantic analysis',d.diagnostics.some(x=>x.phase==='semantic'&&x.severity==='error')?'Schema errors found':'Schema checks complete',!d.diagnostics.some(x=>x.phase==='semantic'&&x.severity==='error')],
+      ['Formatting',d.formatted_sql?'SQL formatted':'Unavailable',!!d.formatted_sql],
+      ['Optimization pass',(d.optimizations&&d.optimizations.length)?`${d.optimizations.length} predicate(s) simplified`:'No optimization needed',true],
+      ['Review and scoring',`${d.code_smells.length} smell(s); score ${d.quality_score.score}`,d.ok]
+    ];
+    renderStages('stages',stages);
+    $('status').textContent=d.ok?'Analysis complete':'Analysis completed with errors.';
+  }catch(e){
+    $('status').textContent='Could not reach the local analyzer.';
+  }
+}
+$('run').addEventListener('click',analyze);
+analyze();
 </script></body></html>'''
 
 
