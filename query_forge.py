@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Query Forge: an educational SQL analyzer and rule-based reviewer.
-
-This intentionally supports a useful SELECT-focused SQL subset rather than all
-of SQL. It uses only the Python standard library and never executes queries.
-"""
+    
 
 from __future__ import annotations
 
