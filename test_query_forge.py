@@ -108,6 +108,59 @@ class TestQueryForge(unittest.TestCase):
         self.assertIn("textContent", PAGE)
         self.assertIn("createElement", PAGE)
 
+    def test_13_valid_insert_query(self):
+        sql = "INSERT INTO Student (student_id, name, age, department_id) VALUES (101, 'Charlie', 22, 1);"
+        res = analyze_query(sql)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["statement_type"], "INSERT")
+        self.assertIn("INSERT INTO Student", res["formatted_sql"])
+
+    def test_14_insert_column_count_mismatch(self):
+        sql = "INSERT INTO Student (student_id, name) VALUES (102, 'David', 23);"
+        res = analyze_query(sql)
+        self.assertFalse(res["ok"])
+        self.assertTrue(any("specified" in d["message"] or "value" in d["message"] for d in res["diagnostics"]))
+
+    def test_15_valid_update_query_with_optimization(self):
+        sql = "UPDATE Student SET age = age + 1 WHERE age > 20 AND age > 20;"
+        res = analyze_query(sql)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["statement_type"], "UPDATE")
+        self.assertIsNotNone(res["optimized_sql"])
+        self.assertEqual(len(res["optimizations"]), 1)
+
+    def test_16_unbounded_update_warning(self):
+        sql = "UPDATE Student SET age = 25;"
+        res = analyze_query(sql)
+        self.assertTrue(res["ok"])
+        self.assertTrue(any(s["code"] == "UNBOUNDED_UPDATE" for s in res["code_smells"]))
+
+    def test_17_valid_delete_query(self):
+        sql = "DELETE FROM Enrollment WHERE grade = 'F';"
+        res = analyze_query(sql)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["statement_type"], "DELETE")
+
+    def test_18_create_table_query(self):
+        sql = "CREATE TABLE IF NOT EXISTS Teachers (teacher_id INT PRIMARY KEY, name VARCHAR(100) NOT NULL, salary FLOAT);"
+        res = analyze_query(sql)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["statement_type"], "CREATE TABLE")
+        self.assertEqual(len(res["ast"]["columns"]), 3)
+
+    def test_19_drop_table_query(self):
+        sql = "DROP TABLE IF EXISTS TempTable;"
+        res = analyze_query(sql)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["statement_type"], "DROP TABLE")
+
+    def test_20_drop_unknown_table_without_if_exists(self):
+        sql = "DROP TABLE NonExistentTable;"
+        res = analyze_query(sql)
+        self.assertFalse(res["ok"])
+        self.assertTrue(any("Unknown table" in d["message"] for d in res["diagnostics"]))
+
 
 if __name__ == "__main__":
     unittest.main()
+
